@@ -33,13 +33,17 @@ def main():
     try:
         welcome()
         config = read_config()
+        now = datetime.now().astimezone(ZoneInfo(config.time_zone)).isoformat()
+
         [time_from, time_final] = [
             datetime.fromisoformat(time).astimezone(ZoneInfo(config.time_zone))
             for time in [config.start, config.end]
         ]
         time_to = time_final
         dt = time_to - time_from
-        path = init_log_file(config)
+
+        query = build_query(config)
+        path = init_log_file(config, query, now)
 
         while True:
             while True:
@@ -47,7 +51,7 @@ def main():
                     f"[{EMOTION_INDIFFERENT}] Searching in the interval "
                     + f'{time_from.isoformat(timespec="milliseconds")} - {time_to.isoformat(timespec="milliseconds")}'
                 )
-                aggregate_url = get_aggregate_url(time_from, time_to, config)
+                aggregate_url = get_aggregate_url(time_from, time_to, config, query)
 
                 # Check the number of log entries available in the specified time interval
                 response = get_response(aggregate_url, config)
@@ -74,7 +78,7 @@ def main():
                 dt /= 2
                 time_to = time_from + dt
 
-            search_url = get_search_url(time_from, time_to, config)
+            search_url = get_search_url(time_from, time_to, config, query)
             response = get_response(search_url, config)
             data = json.loads(response.text)
             with open(path, "a") as f:
@@ -107,6 +111,8 @@ class Config:
     time_zone: str = "Europe/Rome"
     file: str = "output.txt"
     directory: str = "."
+    pod: str = None
+    query: str = None
 
 
 def read_config():
@@ -119,11 +125,13 @@ def read_config():
     cfg.token = config.get("Connection", "token").strip()
     cfg.start = config.get("Log", "start").strip()
     cfg.end = config.get("Log", "end").strip()
-    cfg.source = config.get("Log", "source").strip().replace("\\", "\\\\")
+    cfg.source = config.get("Log", "source").strip().lower().replace("\\", "\\\\")
     cfg.magic_factor = float(config.get("Nerd zone", "magicfactor").strip())
     cfg.time_zone = config.get("Nerd zone", "timezone").strip()
     cfg.file = config.get("Output", "file").strip()
     cfg.directory = config.get("Output", "directory").strip()
+    cfg.pod = config.get("Log", "pod").strip()
+    cfg.query = config.get("Override", "query", fallback="").strip()
     return cfg
 
 
@@ -141,16 +149,36 @@ def get_headers(config):
     }
 
 
-def get_aggregate_url(start, end, config):
-    query_from = encode_time_qs("from", start.isoformat(timespec="milliseconds"))
-    query_to = encode_time_qs("to", end.isoformat(timespec="milliseconds"))
-    return f'{config.base_url}/rest/v2/logs/aggregate?query=k8s.namespace.name="{config.namespace}"&maxGroupValues=100&timeBuckets=1&groupBy=log.source&{query_from}&{query_to}'
+def build_query(config):
+    if config.query:
+        return config.query
+    namespace_query = (
+        f'k8s.namespace.name="{config.namespace}"' if config.namespace else ""
+    )
+    pod_query = f'k8s.pod.name="{config.pod}"' if config.pod else ""
+    source_query = f'log.source="{config.source}"' if config.source else ""
+    query = " AND ".join(
+        [filter for filter in [namespace_query, pod_query, source_query] if filter]
+    )
+    return query
 
 
-def get_search_url(start, end, config):
+def get_aggregate_url(start, end, config, query):
     query_from = encode_time_qs("from", start.isoformat(timespec="milliseconds"))
     query_to = encode_time_qs("to", end.isoformat(timespec="milliseconds"))
-    return f'{config.base_url}/rest/v2/logs/search?{query_from}&{query_to}&limit=1000&sort=timestamp&query=k8s.namespace.name="{config.namespace}" AND log.source="{config.source}"'
+    url = f"{config.base_url}/rest/v2/logs/aggregate?&maxGroupValues=100&timeBuckets=1&groupBy=log.source&{query_from}&{query_to}"
+    if query:
+        url += f"&query={query}"
+    return url
+
+
+def get_search_url(start, end, config, query):
+    query_from = encode_time_qs("from", start.isoformat(timespec="milliseconds"))
+    query_to = encode_time_qs("to", end.isoformat(timespec="milliseconds"))
+    url = f"{config.base_url}/rest/v2/logs/search?{query_from}&{query_to}&limit=1000&sort=timestamp"
+    if query:
+        url += f"&query={query}"
+    return url
 
 
 def get_response(url, config):
@@ -163,15 +191,17 @@ def welcome():
     print(HEADER)
 
 
-def init_log_file(config):
+def init_log_file(config, query, now):
     Path(config.directory).mkdir(parents=True, exist_ok=True)
     path = os.path.join(config.directory, config.file)
 
     lines = HEADER.splitlines() + [
         f"SOURCE NAMESPACE:         {config.namespace}",
+        f"SOURCE POD:               {config.pod}",
         f"SOURCE LOG FILE:          {config.source}".replace("\\\\", "\\"),
         f"TIME INTERVAL:            {config.start} - {config.end}",
         f"ORIGINALLY WRITTEN TO:    {path}",
+        f"DYNALOGDOWN RUN AT:       {now}",
         "",
     ]
     hspace = 3
@@ -189,7 +219,11 @@ def init_log_file(config):
         for line in lines
     ]
     extra_line = PADDING_CHAR * len(lines[0]) + "\n"
-    lines = [extra_line] + [line + "\n" for line in lines] + [extra_line, "\n"]
+    lines = (
+        [extra_line]
+        + [line + "\n" for line in lines]
+        + [extra_line, "\n", f"{PADDING_CHAR*hfill + ' '*hspace}QUERY: {query}\n", "\n"]
+    )
 
     with open(path, "w") as f:
         f.writelines(lines)
