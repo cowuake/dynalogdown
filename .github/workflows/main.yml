@@ -44,7 +44,7 @@ jobs:
     - name: Get the latest tag
       id: get-tag
       run: |
-        echo "name=TAG::$(git describe --always --tags $(git rev-list --tags --max-count=1))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        echo "::set-output name=tag::$(git describe --always --tags $(git rev-list --tags --max-count=1))"
 
     - name: Create Release
       id: create-release
@@ -52,8 +52,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ env.TAG }}
-        release_name: Release ${{ env.TAG }}
+        tag_name: ${{ steps.get-tag.outputs.tag }}
+        release_name: Release ${{ steps.get-tag.outputs.tag }}
         draft: false
         prerelease: true
 
