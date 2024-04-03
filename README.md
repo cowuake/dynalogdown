@@ -1,7 +1,7 @@
 # Dynalogdown
 
 If you're not among those being supplied with the link to this repository, you might probably look elsewhere.
-Otherwise, enjoy this freaky tool... Nothing to be proud of! :'D
+Otherwise, enjoy this freaky tool...
 
 ## Usage
 
